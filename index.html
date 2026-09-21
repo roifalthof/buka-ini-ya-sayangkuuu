@@ -245,6 +245,14 @@
     button:focus-visible,input:focus-visible{outline:3px solid #a4215c;outline-offset:4px;}
     @media(max-width:700px){.love-popup{width:calc(100% - 28px);padding:46px 24px 26px;border-radius:26px;}.love-layout{grid-template-columns:1fr;gap:28px;}.love-popup .result{font-size:34px;}.love-copy p{font-size:14px;}.player{width:100%;max-width:340px;margin:auto;}.vinyl{max-width:210px;}}
     @media(prefers-reduced-motion:reduce){.heart{display:none;}.vinyl,.love-popup[open]{animation:none;}}
+
+    /* Keep the complete letter's layout while revealing each character. */
+    .letter-char{visibility:hidden;position:relative;}
+    .letter-char.revealed{visibility:visible;}
+    .letter-char.typing-cursor::before{content:"";position:absolute;left:0;top:0.05em;height:1.05em;border-left:2px solid #ed4087;animation:letterBlink 0.8s step-end infinite;visibility:visible;}
+    .letter-readable{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0;}
+    @keyframes letterBlink{50%{opacity:0;}}
+    @media(prefers-reduced-motion:reduce){.letter-char.typing-cursor::before{animation:none;}}
   </style>
 </head>
 <body>
@@ -336,11 +344,74 @@
       document.getElementById("page2").classList.remove("hidden");
     }
 
+
+    // Slow letter typing, restarted on each opening and cancelled on close.
+    const letterCharacters = [];
+    const letterParagraphEnds = new Set();
+    let letterTimer = null;
+    const LETTER_TYPING_DELAY = 55; // Milliseconds per character.
+    document.querySelectorAll('.love-copy p').forEach(paragraph => {
+      const readable = document.createElement('span');
+      readable.className = 'letter-readable';
+      readable.innerHTML = paragraph.innerHTML;
+      const visual = document.createElement('span');
+      visual.setAttribute('aria-hidden', 'true');
+      visual.innerHTML = paragraph.innerHTML;
+      const walker = document.createTreeWalker(visual, NodeFilter.SHOW_TEXT);
+      const textNodes = [];
+      while(walker.nextNode()) textNodes.push(walker.currentNode);
+      textNodes.forEach(node => {
+        const fragment = document.createDocumentFragment();
+        const characters = typeof Intl.Segmenter === 'function'
+          ? Array.from(new Intl.Segmenter('id', {granularity:'grapheme'}).segment(node.textContent), part => part.segment)
+          : Array.from(node.textContent);
+        characters.forEach(character => {
+          const span = document.createElement('span');
+          span.className = 'letter-char';
+          span.textContent = character;
+          fragment.appendChild(span);
+          letterCharacters.push(span);
+        });
+        node.replaceWith(fragment);
+      });
+      paragraph.replaceChildren(readable, visual);
+      letterParagraphEnds.add(letterCharacters.length - 1);
+    });
+    function stopLetterTyping(){
+      clearTimeout(letterTimer);
+      letterTimer = null;
+      letterCharacters.forEach(span => span.classList.remove('typing-cursor'));
+    }
+    function startLetterTyping(){
+      stopLetterTyping();
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      letterCharacters.forEach(span => span.classList.toggle('revealed', reduceMotion));
+      if(reduceMotion || !letterCharacters.length) return;
+      let index = 0;
+      letterCharacters[0].classList.add('typing-cursor');
+      function typeNext(){
+        if(!document.getElementById('lovePopup').open){stopLetterTyping();return;}
+        const span = letterCharacters[index];
+        span.classList.remove('typing-cursor');
+        span.classList.add('revealed');
+        const pause = letterParagraphEnds.has(index) ? 650
+          : /[.!?]/u.test(span.textContent) ? 380
+          : /[,;—]/u.test(span.textContent) ? 180 : LETTER_TYPING_DELAY;
+        index++;
+        if(index < letterCharacters.length){
+          letterCharacters[index].classList.add('typing-cursor');
+          letterTimer = setTimeout(typeNext, pause);
+        } else letterTimer = null;
+      }
+      letterTimer = setTimeout(typeNext, 500);
+    }
+
     // ACCEPT LOVE
 
     function acceptLove(){
       document.getElementById("page2").classList.add("hidden");
       document.getElementById("lovePopup").showModal();
+      startLetterTyping();
       startMusic();
     }
 
@@ -376,7 +447,7 @@
     function toggleMusic(){if(audio.paused)startMusic();else audio.pause();}
     function restartMusic(){audio.currentTime=0;startMusic();}
     function toggleMute(){audio.muted=!audio.muted;el('muteButton').textContent=audio.muted?'♩':'♫';el('muteButton').setAttribute('aria-label',audio.muted?'Aktifkan suara':'Bisukan musik');}
-    function closeLove(){audio.pause();el('lovePopup').close();el('page2').classList.remove('hidden');el('yesBtn').focus();}
+    function closeLove(){stopLetterTyping();audio.pause();el('lovePopup').close();el('page2').classList.remove('hidden');el('yesBtn').focus();}
     function updatePlaying(){const playing=!audio.paused;el('player').classList.toggle('playing',playing);el('playButton').textContent=playing?'Ⅱ':'▶';el('playButton').setAttribute('aria-label',playing?'Jeda musik':'Putar musik');}
     audio.addEventListener('play',updatePlaying);audio.addEventListener('pause',updatePlaying);
     const timeLabel=n=>Math.floor(n/60)+':'+String(Math.floor(n%60)).padStart(2,'0');
